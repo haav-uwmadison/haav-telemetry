@@ -1,0 +1,6 @@
+[Unit]
+Description=Haav: write Pi firmware health metrics for Alloy
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/haav/pi-health.sh

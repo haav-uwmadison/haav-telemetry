@@ -1,0 +1,10 @@
+[Unit]
+Description=Haav: refresh Pi firmware health metrics every 15 s
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=15s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

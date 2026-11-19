@@ -134,8 +134,11 @@ Two processes do the real work. Everything else is stock OS plumbing.
 - Add `external_labels = { boat = "haav", host = "haav-pi" }`.
 - The Grafana Cloud token lives in `/etc/default/alloy`, **never in git**.
 
-Pi throttling flags (`vcgencmd get_throttled`: under-voltage!) aren't in the unix exporter. `haavd` should expose them
-through a small `pi` collector. Under-voltage on the 5 V rail is something we specifically want to catch on this boat.
+Pi throttling flags (`vcgencmd get_throttled`: under-voltage!) aren't in the unix exporter. A 15 s systemd timer
+(`deploy/pi-health/pi-health.sh`) writes them to Alloy's textfile collector as `haav_pi_*`, so they work before
+`haavd` exists. Under-voltage on the 5 V rail is something we specifically want to catch on this boat.
+
+**Implemented:** see [Pi metrics setup](#pi-metrics-setup-build-step-2) below.
 
 ### 3.3 OS plumbing (configured, not written)
 
@@ -216,6 +219,34 @@ deploy/           # install.sh, systemd/*.service, alloy/config.alloy, chrony/, 
 dashboards/       # Grafana JSON
 tools/            # session export (SQLite → CSV/Parquet), bench scripts
 ```
+
+---
+
+## Pi metrics setup (build step 2)
+
+This sends the Pi's own health to Grafana Cloud with no sensors attached. Use it to prove the LTE → cloud path.
+
+```sh
+git clone https://github.com/haav-uwmadison/haav-telemetry && cd haav-telemetry
+sudo ./deploy/install.sh          # first run creates /etc/haav/grafana-cloud.env and stops
+sudo nano /etc/haav/grafana-cloud.env   # URL + user from Grafana Cloud → Prometheus → "Send metrics";
+                                        # token = access policy with metrics:write
+sudo ./deploy/install.sh          # installs Alloy + the pi-health timer and starts them
+```
+
+| File | What it does |
+|---|---|
+| `deploy/alloy/config.alloy` | Built-in node exporter with an allow-list of about 60 series, scraped every 15 s, then `remote_write` to Grafana Cloud with an 8 h disk buffer |
+| `deploy/pi-health/pi-health.sh` + `deploy/systemd/haav-pi-health.*` | Every 15 s, writes `vcgencmd` under-voltage/throttle/clock/core-voltage as `haav_pi_*` metrics |
+| `deploy/install.sh` | Installs Alloy from Grafana's apt repo and loads the credentials through a systemd drop-in. Safe to re-run |
+
+Metrics sent: CPU (user/system/idle/iowait per core), load, memory, SD free space and read-only flag, network bytes
+per interface (`wwan0` = LTE, which tracks data usage), SoC temperature (`node_thermal_zone_temp`), boot time, and
+`haav_pi_throttle_state{condition,when}`. Every series carries `boat="haav"` and `host=<hostname>`.
+
+**Check it:** the Alloy UI at `http://<pi>:12345` (over Tailscale) shows each component's health. In Grafana Cloud → Explore,
+run `node_thermal_zone_temp{boat="haav"}`. To test buffering, unplug the LTE antenna for 10 minutes, plug it back in,
+and check that the graph has no gap.
 
 ---
 
