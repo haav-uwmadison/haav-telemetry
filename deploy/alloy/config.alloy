@@ -67,8 +67,8 @@ prometheus.relabel "pi" {
 // Grafana Cloud (Prometheus / Mimir), buffered on disk while LTE is down
 // ---------------------------------------------------------------------------
 prometheus.remote_write "grafana_cloud" {
+  // Separates the boat's Pi from a bench Pi or laptop running the same stack.
   external_labels = {
-    boat = "haav",
     host = constants.hostname,
   }
 

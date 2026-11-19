@@ -131,7 +131,7 @@ Two processes do the real work. Everything else is stock OS plumbing.
   **but not from the local SQLite log**, which is why that log exists.
 - `loki.source.journal` → Grafana Cloud Loki for `haavd`, `alloy`, ModemManager and Tailscale logs, filtered to
   warning and above plus `haavd` info.
-- Add `external_labels = { boat = "haav", host = "haav-pi" }`.
+- Add `external_labels = { host = <hostname> }`, so a bench Pi or laptop running the stack doesn't mix with the boat's data.
 - The Grafana Cloud token lives in `/etc/default/alloy`, **never in git**.
 
 Pi throttling flags (`vcgencmd get_throttled`: under-voltage!) aren't in the unix exporter. A 15 s systemd timer
@@ -242,10 +242,10 @@ sudo ./deploy/install.sh          # installs Alloy + the pi-health timer and sta
 
 Metrics sent: CPU (user/system/idle/iowait per core), load, memory, SD free space and read-only flag, network bytes
 per interface (`wwan0` = LTE, which tracks data usage), SoC temperature (`node_thermal_zone_temp`), boot time, and
-`haav_pi_throttle_state{condition,when}`. Every series carries `boat="haav"` and `host=<hostname>`.
+`haav_pi_throttle_state{condition,when}`. Every series carries `host=<hostname>`.
 
 **Check it:** the Alloy UI at `http://<pi>:12345` (over Tailscale) shows each component's health. In Grafana Cloud → Explore,
-run `node_thermal_zone_temp{boat="haav"}`. To test buffering, unplug the LTE antenna for 10 minutes, plug it back in,
+run `node_thermal_zone_temp`. To test buffering, unplug the LTE antenna for 10 minutes, plug it back in,
 and check that the graph has no gap.
 
 ---
