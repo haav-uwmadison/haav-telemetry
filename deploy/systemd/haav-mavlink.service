@@ -1,0 +1,19 @@
+[Unit]
+Description=Haav: Pixhawk MAVLink -> Prometheus metrics + journal events
+After=network.target
+# Never give up restarting (e.g. Python crash); a missing serial device is retried inside the process.
+StartLimitIntervalSec=0
+
+[Service]
+EnvironmentFile=/etc/haav/mavlink.env
+ExecStart=/opt/haav/mavlink-venv/bin/python /usr/local/lib/haav/haav-mavlink.py
+Restart=always
+RestartSec=5
+# Unprivileged throwaway user; dialout grants the serial port.
+DynamicUser=yes
+SupplementaryGroups=dialout
+NoNewPrivileges=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

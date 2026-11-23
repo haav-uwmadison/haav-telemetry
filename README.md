@@ -1,8 +1,8 @@
 # haav-telemetry
 
-Telemetry software for Haav's Raspberry Pi 4: reads boat sensors, logs locally, and pushes metrics over LTE to Grafana Cloud (with room for Pixhawk MAVLink later).
+Telemetry software for Haav's Raspberry Pi 4: reads boat sensors, logs locally, and pushes Pi and Pixhawk (MAVLink) metrics over LTE to Grafana Cloud.
 
-**Status:** Step 2 (Pi health metrics + filtered system logs → Grafana Cloud via Alloy) is built and ready to test on a Pi. Sensor daemon (`haavd`), dashboards, and Pixhawk integration are planned below.
+**Status:** Step 2 (Pi health metrics + filtered system logs → Grafana Cloud via Alloy) and Pixhawk MAVLink telemetry (`haav-mavlink`) are built and ready to test on a Pi; Grafana dashboards are in `dashboards/`. Sensor daemon (`haavd`) and alerts are planned below.
 
 ---
 
@@ -24,6 +24,8 @@ sudo ./deploy/install.sh                 # installs/updates Alloy + pi-health ti
 | `deploy/pi-health/pi-health.sh` + `deploy/systemd/haav-pi-health.*` | 15 s systemd timer writing `vcgencmd` under-voltage/throttle flags, ARM clock, and core voltage to `/var/lib/haav/textfile` |
 | `deploy/install.sh` | Idempotent installer: sets up Grafana's apt repo, Alloy (+ `systemd-journal` group), systemd drop-in (`/etc/systemd/system/alloy.service.d/haav.conf`), and `haav-pi-health.timer` |
 | `deploy/grafana-cloud.env.example` | Template copied to `/etc/haav/grafana-cloud.env` (`chmod 600`, gitignored) |
+| `deploy/mavlink/haav-mavlink.py` + `deploy/systemd/haav-mavlink.service` | Reads Pixhawk MAVLink (SiK radio, USB, or UART), serves `haav_mav_*` on `127.0.0.1:9102` (Alloy scrapes every 5 s), and logs events to journald → Loki. Python venv at `/opt/haav/mavlink-venv` |
+| `deploy/mavlink.env.example` | Copied once to `/etc/haav/mavlink.env`: serial device/baud and servo output names |
 
 **Dashboards** (`dashboards/`, not deployed to the Pi): JSON is generated, so edit the `build_*.py` script and regenerate (`python3 dashboards/build_pi.py dashboards/pi.json`), then import into Grafana Cloud (Dashboards → New → Import, overwrite).
 
@@ -47,9 +49,11 @@ sudo ./deploy/install.sh                 # installs/updates Alloy + pi-health ti
 
 **Metrics sent:** CPU (user/system/idle/iowait per core), load, memory, SD free space & read-only flag, SD I/O (`mmcblk0` bytes/ops/busy), network bytes, errors/drops & link state (`eth0`, `wlan0`, `wwan0` = LTE burn rate, `usb0`, `tailscale0`), SoC temperature (`node_thermal_zone_temp` / `node_hwmon_temp_celsius`), boot time, and `haav_pi_*` firmware health.
 
-**Logs sent:** `WARNING`+ from `kernel`, `ModemManager`, `tailscaled`, `alloy`, and `haav-pi-health` (plus `INFO`+ from `haavd` once built). All metrics and logs carry `host=<hostname>` to separate the boat's Pi from a bench Pi or laptop.
+**Pixhawk metrics (`haav_mav_*`, ~50 series @ 5 s):** link (`connected`, `radio_rssi/remrssi/noise/rxerrors`, `rc_rssi`), state (`armed`, `mode{mode}`, `system_status`), navigation (`gps_lat/lon`, `groundspeed_mps`, `heading_deg`, `mission_seq`, `wp_dist_m`, `xtrack_error_m`), health (`gps_fix_type/sats/hdop`, `ekf_flags`, `ekf_variance{kind}`, `sensor_healthy{sensor}`, `vcc_volts`, `roll_deg/pitch_deg`, `board_temp_celsius`, `clock_offset_seconds`), and power/control (`battery_volts/amps/remaining_ratio/consumed_mah`, `servo_pwm{output}`, `throttle_percent`). Each metric disappears 10 s after its MAVLink message stops arriving, so a lost link shows as a gap instead of a frozen value. The service is read-only: it sends only `SET_MESSAGE_INTERVAL` and never sends HEARTBEATs, so stopping it can't trigger a GCS failsafe.
 
-**Verify:** open Alloy's UI at `http://<pi>:12345` (over Tailscale), query `node_thermal_zone_temp` (Prometheus) and `{job="systemd-journal"}` (Loki) in Grafana Cloud → Explore, then unplug the LTE antenna for 10 min and confirm metrics backfill with no gap.
+**Logs sent:** `WARNING`+ from `kernel`, `ModemManager`, `tailscaled`, `alloy`, and `haav-pi-health`; `INFO`+ from `haav-mavlink` (Pixhawk `STATUSTEXT` at its own severity, mode changes, arm/disarm, waypoints reached, link up/down) and `haavd` once built. All metrics and logs carry `host=<hostname>` to separate the boat's Pi from a bench Pi or laptop.
+
+**Verify:** open Alloy's UI at `http://<pi>:12345` (over Tailscale), query `node_thermal_zone_temp` (Prometheus) and `{job="systemd-journal"}` (Loki) in Grafana Cloud → Explore, then unplug the LTE antenna for 10 min and confirm metrics backfill with no gap. For the Pixhawk: `journalctl -u haav-mavlink -f` should show `autopilot link up`, and `curl -s localhost:9102/metrics` should list `haav_mav_*`.
 
 ---
 
@@ -115,6 +119,7 @@ The only process talking to Grafana Cloud. Ships as an arm64 `.deb` systemd serv
 - **Metrics:** built-in `prometheus.exporter.unix` allow-listed to ~60 series + `/var/lib/haav/textfile` (`pi-health.sh` `vcgencmd` flags, catching 5 V rail under-voltage), scraped every 15 s → `prometheus.remote_write` with 8 h disk WAL and retry backoff (1 s → 1 m).
 - **Logs:** `loki.source.journal` filtered to `WARNING`+ from `kernel`, `ModemManager`, `tailscaled`, `alloy`, and `haav-pi-health` (plus `INFO`+ from `haavd`) → `loki.write` with indefinite retry backoff (1 s → 1 m).
 - Both pipelines tag `external_labels = { host = constants.hostname }` and read credentials from `/etc/haav/grafana-cloud.env`.
+- **Pixhawk:** scrapes `haav-mavlink` (`127.0.0.1:9102`, every 5 s), keeping only `up` and `haav_mav_*`.
 - **Planned:** scrape `haavd` (`:9101`, every 5 s).
 
 ### `haavd` (planned)
@@ -146,12 +151,12 @@ haav_esc_fet_temperature_celsius / _motor_temperature_celsius / _duty_ratio / _f
 haav_bms_pack_voltage_volts / _current_amps / _soc_ratio / _cell_voltage_volts{cell} / _protection_flags
 haav_lte_rssi_dbm / _rsrp_dbm / _rsrq_db / _sinr_db / _registered
 haav_clock_synced  haav_alarm{rule}  haav_collector_up{collector}
-# Later (Pixhawk): haav_mav_* (gps_lat/lon for Geomap, sats, attitude, mode, armed, battery)
+# Implemented (haav-mavlink): haav_mav_* (see Quick start for the full list)
 ```
 
 ### Grafana Cloud & Pixhawk (planned)
 - **Dashboards & alerts (`dashboards/`):** JSON for *Boat overview*, *Pi health*, and *Link/data usage*. Notification-only alerts (Discord/Slack/email) for `haav_alarm`, `haav_water_detected == 1`, over-temp, `haav_collector_up == 0`, and `absent(up{job="haavd"})` for 2 m.
-- **Pixhawk:** attach over USB or spare Pi 4 UART (`dtoverlay=uart3/4/5`) through **`mavlink-router`**, splitting to `haavd` (`HEARTBEAT`, `SYS_STATUS`, `GPS_RAW_INT`, `GLOBAL_POSITION_INT`, `ATTITUDE`, `BATTERY_STATUS`, `VFR_HUD`) and a Tailscale UDP endpoint for QGC/Mission Planner. Review Pi-vs-RF override priority before enabling `MAV_CMD_COMPONENT_ARM_DISARM` / RTL. Optionally inject Pi readings into ArduPilot's dataflash log via `NAMED_VALUE_FLOAT`.
+- **Pixhawk:** `haav-mavlink` (implemented) reads one serial port directly. Next step: attach over USB or spare Pi 4 UART (`dtoverlay=uart3/4/5`) through **`mavlink-router`**, splitting to `haavd` (`HEARTBEAT`, `SYS_STATUS`, `GPS_RAW_INT`, `GLOBAL_POSITION_INT`, `ATTITUDE`, `BATTERY_STATUS`, `VFR_HUD`) and a Tailscale UDP endpoint for QGC/Mission Planner. Review Pi-vs-RF override priority before enabling `MAV_CMD_COMPONENT_ARM_DISARM` / RTL. Optionally inject Pi readings into ArduPilot's dataflash log via `NAMED_VALUE_FLOAT`.
 
 ---
 
@@ -162,8 +167,8 @@ haav_clock_synced  haav_alarm{rule}  haav_collector_up{collector}
 - [ ] **3. `haavd` skeleton:** `fake` collector + SQLite WAL log + `/metrics` (develop on laptop).
 - [ ] **4. DS18B20 + safety engine (hysteresis) + water sensors.**
 - [ ] **5. Modem metrics → VESC BLE → BMS.**
-- [ ] **6. Dashboards & alerts in `dashboards/`.**
-- [ ] **7. Pixhawk via `mavlink-router`.**
+- [ ] **6. Dashboards & alerts in `dashboards/`.** *(dashboards built; alerts remain.)*
+- [ ] **7. Pixhawk via `mavlink-router`.** *(`haav-mavlink` metrics/events implemented; router + Pi→Pixhawk commands remain.)*
 
 ```text
 deploy/           # install.sh, alloy/config.alloy, pi-health/, systemd/, grafana-cloud.env.example

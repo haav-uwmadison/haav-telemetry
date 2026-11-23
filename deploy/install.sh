@@ -56,11 +56,31 @@ install -m 755 "$HERE/pi-health/pi-health.sh" /usr/local/lib/haav/pi-health.sh
 install -m 644 "$HERE/systemd/haav-pi-health.service" /etc/systemd/system/
 install -m 644 "$HERE/systemd/haav-pi-health.timer" /etc/systemd/system/
 
+# --- Pixhawk MAVLink -> metrics + events ------------------------------------
+if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y python3-venv
+fi
+install -d -m 755 /opt/haav
+# Check for pip, not python: an interrupted venv creation leaves bin/python without bin/pip.
+if [ ! -x /opt/haav/mavlink-venv/bin/pip ]; then
+  python3 -m venv --clear /opt/haav/mavlink-venv
+fi
+/opt/haav/mavlink-venv/bin/pip install --quiet --disable-pip-version-check -r "$HERE/mavlink/requirements.txt"
+install -m 755 "$HERE/mavlink/haav-mavlink.py" /usr/local/lib/haav/haav-mavlink.py
+if [ ! -f /etc/haav/mavlink.env ]; then
+  install -m 644 "$HERE/mavlink.env.example" /etc/haav/mavlink.env
+  echo ">>> Created /etc/haav/mavlink.env; set HAAV_MAV_DEVICE to your radio/Pixhawk port." >&2
+fi
+install -m 644 "$HERE/systemd/haav-mavlink.service" /etc/systemd/system/
+
 # --- Alloy config -----------------------------------------------------------
 install -m 644 "$HERE/alloy/config.alloy" /etc/alloy/config.alloy
 
 systemctl daemon-reload
 systemctl enable --now haav-pi-health.timer
+systemctl enable haav-mavlink
+systemctl restart haav-mavlink
 systemctl enable alloy
 systemctl restart alloy
 

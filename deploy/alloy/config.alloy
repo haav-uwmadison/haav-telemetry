@@ -76,6 +76,28 @@ prometheus.relabel "pi" {
 }
 
 // ---------------------------------------------------------------------------
+// Pixhawk telemetry (deploy/mavlink/haav-mavlink.py, ~50 series)
+// ---------------------------------------------------------------------------
+prometheus.scrape "mavlink" {
+	targets         = [{"__address__" = "127.0.0.1:9102"}]
+	forward_to      = [prometheus.relabel.mavlink.receiver]
+	job_name        = "haav-mavlink"
+	scrape_interval = "5s"
+	scrape_timeout  = "4s" // default 10s must not exceed the interval, or Alloy refuses to start
+}
+
+prometheus.relabel "mavlink" {
+	forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+
+	// Drop Alloy's synthetic scrape_* series except `up` (exporter alive?).
+	rule {
+		source_labels = ["__name__"]
+		regex         = "up|haav_mav_.+"
+		action        = "keep"
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Grafana Cloud (Prometheus / Mimir), buffered on disk while LTE is down
 // ---------------------------------------------------------------------------
 prometheus.remote_write "grafana_cloud" {
@@ -129,10 +151,11 @@ loki.relabel "journal" {
 		target_label  = "level"
 	}
 
-	// Allow-list: WARNING+ (0..4) for key OS/network services & kernel; INFO+ (0..6) for haavd.
+	// Allow-list: WARNING+ (0..4) for key OS/network services & kernel; INFO+ (0..6) for haavd and
+	// haav-mavlink (Pixhawk STATUSTEXT, mode/arm changes, waypoints, link up/down).
 	rule {
 		source_labels = ["unit", "__journal_priority"]
-		regex         = "(kernel|ModemManager\\.service|tailscaled\\.service|alloy\\.service|haav-pi-health\\.service);[0-4]|haavd\\.service;([0-6]|)"
+		regex         = "(kernel|ModemManager\\.service|tailscaled\\.service|alloy\\.service|haav-pi-health\\.service);[0-4]|(haavd|haav-mavlink)\\.service;([0-6]|)"
 		action        = "keep"
 	}
 }
