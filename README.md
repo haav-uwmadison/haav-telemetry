@@ -25,6 +25,26 @@ sudo ./deploy/install.sh                 # installs/updates Alloy + pi-health ti
 | `deploy/install.sh` | Idempotent installer: sets up Grafana's apt repo, Alloy (+ `systemd-journal` group), systemd drop-in (`/etc/systemd/system/alloy.service.d/haav.conf`), and `haav-pi-health.timer` |
 | `deploy/grafana-cloud.env.example` | Template copied to `/etc/haav/grafana-cloud.env` (`chmod 600`, gitignored) |
 
+**Dashboards** (`dashboards/`, not deployed to the Pi): JSON is generated, so edit the `build_*.py` script and regenerate (`python3 dashboards/build_pi.py dashboards/pi.json`), then import into Grafana Cloud (Dashboards → New → Import, overwrite).
+
+| File | Dashboard |
+|---|---|
+| `underway.json` ← `build_underway.py` | **Haav underway**: what to watch while the boat runs (Pixhawk + Pi status tiles, GPS track, speed/battery/nav/temps, LTE, events; bench panels collapsed) |
+| `pi.json` ← `build_pi.py` | **Haav Pi**: drill-down (decoded throttle flags, temp vs clock, per-core CPU, memory, SD space/I/O/time-until-full, per-interface network + link state + errors, LTE burn vs 500 MB SIM, sample lag, logs by unit/level) |
+| `panels.py` | Shared panel builders |
+
+**Editing dashboards with Claude Code ([Grafana MCP](https://github.com/grafana/mcp-grafana)):** lets Claude query Prometheus/Loki, check panel queries against real data, render panels, and push dashboards.
+
+1. Grafana Cloud → **Administration → Users and access → Service accounts → Add service account**, role **Editor** → **Add service account token** (`glsa_…`).
+2. With Docker running, register the server once per machine (user scope keeps the token in `~/.claude.json`, out of the repo; don't use `-s project`, which writes `.mcp.json`):
+   ```sh
+   claude mcp add grafana -s user \
+     -e GRAFANA_URL=https://<stack>.grafana.net \
+     -e GRAFANA_SERVICE_ACCOUNT_TOKEN=glsa_xxx \
+     -- docker run --rm -i -e GRAFANA_URL -e GRAFANA_SERVICE_ACCOUNT_TOKEN mcp/grafana -t stdio
+   ```
+3. `claude mcp list` should show `grafana … ✔ Connected`; start a new Claude Code session so the tools load. Never paste the token into chat.
+
 **Metrics sent:** CPU (user/system/idle/iowait per core), load, memory, SD free space & read-only flag, network bytes (`eth0`, `wlan0`, `wwan0` = LTE burn rate, `usb0`, `tailscale0`), SoC temperature (`node_thermal_zone_temp` / `node_hwmon_temp_celsius`), boot time, and `haav_pi_*` firmware health.
 
 **Logs sent:** `WARNING`+ from `kernel`, `ModemManager`, `tailscaled`, `alloy`, and `haav-pi-health` (plus `INFO`+ from `haavd` once built). All metrics and logs carry `host=<hostname>` to separate the boat's Pi from a bench Pi or laptop.
