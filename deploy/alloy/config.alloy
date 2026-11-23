@@ -19,7 +19,14 @@ prometheus.exporter.unix "pi" {
 		"thermal_zone",
 		"stat",
 		"textfile",
+		"diskstats",
+		"netclass",
 	]
+
+	disk {
+		// The SD card only (not its partitions, loop or ram devices): I/O rate + busy time = dying-card warning.
+		device_include = "^mmcblk0$"
+	}
 
 	filesystem {
 		// Root SD card and boot partition only.
@@ -30,6 +37,11 @@ prometheus.exporter.unix "pi" {
 	netdev {
 		// eth0/wlan0 on the bench, wwan0 is the LTE modem, tailscale0 is the VPN.
 		device_include = "^(eth0|wlan0|wwan0|usb0|tailscale0)$"
+	}
+
+	netclass {
+		// Only node_network_up survives the allow-list below; skip virtual interfaces.
+		ignored_devices = "^(lo|docker.*|veth.*|br-.*)$"
 	}
 
 	textfile {
@@ -51,7 +63,7 @@ prometheus.relabel "pi" {
 	// Allow-list: everything not named here is dropped before it touches the LTE link.
 	rule {
 		source_labels = ["__name__"]
-		regex         = "up|scrape_duration_seconds|haav_pi_.+|node_textfile_scrape_error|node_(cpu_seconds_total|load1|load5|load15|memory_MemTotal_bytes|memory_MemAvailable_bytes|filesystem_avail_bytes|filesystem_size_bytes|filesystem_readonly|network_receive_bytes_total|network_transmit_bytes_total|network_up|hwmon_temp_celsius|thermal_zone_temp|boot_time_seconds|procs_running)"
+		regex         = "up|scrape_duration_seconds|haav_pi_.+|node_textfile_scrape_error|node_(cpu_seconds_total|load1|load5|load15|memory_MemTotal_bytes|memory_MemAvailable_bytes|filesystem_avail_bytes|filesystem_size_bytes|filesystem_readonly|network_receive_bytes_total|network_transmit_bytes_total|network_(receive|transmit)_(errs|drop)_total|network_up|hwmon_temp_celsius|thermal_zone_temp|boot_time_seconds|procs_running|disk_(read_bytes|written_bytes|reads_completed|writes_completed|io_time_seconds)_total)"
 		action        = "keep"
 	}
 

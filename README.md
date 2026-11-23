@@ -45,7 +45,7 @@ sudo ./deploy/install.sh                 # installs/updates Alloy + pi-health ti
    ```
 3. `claude mcp list` should show `grafana … ✔ Connected`; start a new Claude Code session so the tools load. Never paste the token into chat.
 
-**Metrics sent:** CPU (user/system/idle/iowait per core), load, memory, SD free space & read-only flag, network bytes (`eth0`, `wlan0`, `wwan0` = LTE burn rate, `usb0`, `tailscale0`), SoC temperature (`node_thermal_zone_temp` / `node_hwmon_temp_celsius`), boot time, and `haav_pi_*` firmware health.
+**Metrics sent:** CPU (user/system/idle/iowait per core), load, memory, SD free space & read-only flag, SD I/O (`mmcblk0` bytes/ops/busy), network bytes, errors/drops & link state (`eth0`, `wlan0`, `wwan0` = LTE burn rate, `usb0`, `tailscale0`), SoC temperature (`node_thermal_zone_temp` / `node_hwmon_temp_celsius`), boot time, and `haav_pi_*` firmware health.
 
 **Logs sent:** `WARNING`+ from `kernel`, `ModemManager`, `tailscaled`, `alloy`, and `haav-pi-health` (plus `INFO`+ from `haavd` once built). All metrics and logs carry `host=<hostname>` to separate the boat's Pi from a bench Pi or laptop.
 
