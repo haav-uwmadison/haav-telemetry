@@ -10,8 +10,13 @@ fi
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 
+step() {
+  printf '==> %s\n' "$*"
+}
+
 # --- Grafana Alloy (official apt repo, arm64) -------------------------------
 if ! command -v alloy >/dev/null 2>&1; then
+  step "Installing Grafana Alloy..."
   apt-get update
   apt-get install -y gpg curl
   mkdir -p /etc/apt/keyrings
@@ -20,9 +25,12 @@ if ! command -v alloy >/dev/null 2>&1; then
     > /etc/apt/sources.list.d/grafana.list
   apt-get update
   apt-get install -y alloy
+else
+  step "Grafana Alloy already installed."
 fi
 
 # --- Grafana Cloud credentials ----------------------------------------------
+step "Checking Grafana Cloud credentials..."
 mkdir -p /etc/haav
 if [ ! -f /etc/haav/grafana-cloud.env ]; then
   install -m 600 "$HERE/grafana-cloud.env.example" /etc/haav/grafana-cloud.env
@@ -40,6 +48,7 @@ for var in GRAFANA_CLOUD_PROM_URL GRAFANA_CLOUD_PROM_USER GRAFANA_CLOUD_LOKI_URL
   fi
 done
 
+step "Configuring Alloy service..."
 # Let Alloy read systemd-journald for Loki log shipping.
 usermod -aG systemd-journal alloy
 
@@ -51,6 +60,7 @@ EnvironmentFile=/etc/haav/grafana-cloud.env
 EOF
 
 # --- Pi firmware health -> textfile collector -------------------------------
+step "Installing Pi health collector..."
 install -d -m 755 /usr/local/lib/haav /var/lib/haav/textfile
 install -m 755 "$HERE/pi-health/pi-health.sh" /usr/local/lib/haav/pi-health.sh
 install -m 644 "$HERE/systemd/haav-pi-health.service" /etc/systemd/system/
@@ -58,15 +68,19 @@ install -m 644 "$HERE/systemd/haav-pi-health.timer" /etc/systemd/system/
 
 # --- Pixhawk MAVLink -> metrics + events ------------------------------------
 if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
+  step "Installing python3-venv..."
   apt-get update
   apt-get install -y python3-venv
 fi
 install -d -m 755 /opt/haav
 # Check for pip, not python: an interrupted venv creation leaves bin/python without bin/pip.
 if [ ! -x /opt/haav/mavlink-venv/bin/pip ]; then
+  step "Creating Python virtualenv (/opt/haav/mavlink-venv)..."
   python3 -m venv --clear /opt/haav/mavlink-venv
 fi
-/opt/haav/mavlink-venv/bin/pip install --quiet --disable-pip-version-check -r "$HERE/mavlink/requirements.txt"
+step "Installing MAVLink Python dependencies..."
+/opt/haav/mavlink-venv/bin/pip install --disable-pip-version-check -r "$HERE/mavlink/requirements.txt"
+step "Installing haav-mavlink service..."
 install -m 755 "$HERE/mavlink/haav-mavlink.py" /usr/local/lib/haav/haav-mavlink.py
 if [ ! -f /etc/haav/mavlink.env ]; then
   install -m 644 "$HERE/mavlink.env.example" /etc/haav/mavlink.env
@@ -75,12 +89,17 @@ fi
 install -m 644 "$HERE/systemd/haav-mavlink.service" /etc/systemd/system/
 
 # --- Alloy config -----------------------------------------------------------
+step "Installing Alloy config..."
 install -m 644 "$HERE/alloy/config.alloy" /etc/alloy/config.alloy
 
+step "Reloading systemd daemon..."
 systemctl daemon-reload
+step "Starting haav-pi-health.timer..."
 systemctl enable --now haav-pi-health.timer
+step "Starting haav-mavlink.service..."
 systemctl enable haav-mavlink
 systemctl restart haav-mavlink
+step "Starting alloy.service..."
 systemctl enable alloy
 systemctl restart alloy
 
