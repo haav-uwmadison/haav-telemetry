@@ -8,87 +8,149 @@
 // Pi system metrics (node_exporter, built into Alloy)
 // ---------------------------------------------------------------------------
 prometheus.exporter.unix "pi" {
-  // Only the collectors we use. node_exporter's defaults produce ~1,000 series; we send ~60.
-  set_collectors = [
-    "cpu",
-    "loadavg",
-    "meminfo",
-    "filesystem",
-    "netdev",
-    "hwmon",
-    "thermal_zone",
-    "stat",
-    "textfile",
-  ]
+	// Only the collectors we use. node_exporter's defaults produce ~1,000 series; we send ~60.
+	set_collectors = [
+		"cpu",
+		"loadavg",
+		"meminfo",
+		"filesystem",
+		"netdev",
+		"hwmon",
+		"thermal_zone",
+		"stat",
+		"textfile",
+	]
 
-  filesystem {
-    // Root SD card and boot partition only.
-    mount_points_exclude = "^/(dev|proc|run|sys|tmp|var/lib/docker/.+)($|/)"
-    fs_types_exclude     = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|tmpfs|fusectl|hugetlbfs|mqueue|overlay|proc|pstore|securityfs|sysfs|tracefs|squashfs)$"
-  }
+	filesystem {
+		// Root SD card and boot partition only.
+		mount_points_exclude = "^/(dev|proc|run|sys|tmp|var/lib/docker/.+)($|/)"
+		fs_types_exclude     = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|tmpfs|fusectl|hugetlbfs|mqueue|overlay|proc|pstore|securityfs|sysfs|tracefs|squashfs)$"
+	}
 
-  netdev {
-    // eth0/wlan0 on the bench, wwan0 is the LTE modem, tailscale0 is the VPN.
-    device_include = "^(eth0|wlan0|wwan0|usb0|tailscale0)$"
-  }
+	netdev {
+		// eth0/wlan0 on the bench, wwan0 is the LTE modem, tailscale0 is the VPN.
+		device_include = "^(eth0|wlan0|wwan0|usb0|tailscale0)$"
+	}
 
-  textfile {
-    // deploy/pi-health/pi-health.sh writes vcgencmd throttle/under-voltage flags here.
-    directory = "/var/lib/haav/textfile"
-  }
+	textfile {
+		// deploy/pi-health/pi-health.sh writes vcgencmd throttle/under-voltage flags here.
+		directory = "/var/lib/haav/textfile"
+	}
 }
 
 prometheus.scrape "pi" {
-  targets         = prometheus.exporter.unix.pi.targets
-  forward_to      = [prometheus.relabel.pi.receiver]
-  job_name        = "integrations/raspberrypi-node"
-  scrape_interval = "15s"
+	targets         = prometheus.exporter.unix.pi.targets
+	forward_to      = [prometheus.relabel.pi.receiver]
+	job_name        = "integrations/raspberrypi-node"
+	scrape_interval = "15s"
 }
 
 prometheus.relabel "pi" {
-  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+	forward_to = [prometheus.remote_write.grafana_cloud.receiver]
 
-  // Allow-list: everything not named here is dropped before it touches the LTE link.
-  rule {
-    source_labels = ["__name__"]
-    regex         = "up|scrape_duration_seconds|haav_pi_.+|node_textfile_scrape_error|node_(cpu_seconds_total|load1|load5|load15|memory_MemTotal_bytes|memory_MemAvailable_bytes|filesystem_avail_bytes|filesystem_size_bytes|filesystem_readonly|network_receive_bytes_total|network_transmit_bytes_total|network_up|hwmon_temp_celsius|thermal_zone_temp|boot_time_seconds|procs_running)"
-    action        = "keep"
-  }
+	// Allow-list: everything not named here is dropped before it touches the LTE link.
+	rule {
+		source_labels = ["__name__"]
+		regex         = "up|scrape_duration_seconds|haav_pi_.+|node_textfile_scrape_error|node_(cpu_seconds_total|load1|load5|load15|memory_MemTotal_bytes|memory_MemAvailable_bytes|filesystem_avail_bytes|filesystem_size_bytes|filesystem_readonly|network_receive_bytes_total|network_transmit_bytes_total|network_up|hwmon_temp_celsius|thermal_zone_temp|boot_time_seconds|procs_running)"
+		action        = "keep"
+	}
 
-  // 4 cores x 8 CPU modes = 32 series; the 4 modes below are all we chart.
-  rule {
-    source_labels = ["__name__", "mode"]
-    regex         = "node_cpu_seconds_total;(nice|irq|softirq|steal)"
-    action        = "drop"
-  }
+	// 4 cores x 8 CPU modes = 32 series; the 4 modes below are all we chart.
+	rule {
+		source_labels = ["__name__", "mode"]
+		regex         = "node_cpu_seconds_total;(nice|irq|softirq|steal)"
+		action        = "drop"
+	}
 }
 
 // ---------------------------------------------------------------------------
 // Grafana Cloud (Prometheus / Mimir), buffered on disk while LTE is down
 // ---------------------------------------------------------------------------
 prometheus.remote_write "grafana_cloud" {
-  // Separates the boat's Pi from a bench Pi or laptop running the same stack.
-  external_labels = {
-    host = constants.hostname,
-  }
+	// Separates the boat's Pi from a bench Pi or laptop running the same stack.
+	external_labels = {
+		host = constants.hostname,
+	}
 
-  endpoint {
-    url = sys.env("GRAFANA_CLOUD_PROM_URL")
+	endpoint {
+		url = sys.env("GRAFANA_CLOUD_PROM_URL")
 
-    basic_auth {
-      username = sys.env("GRAFANA_CLOUD_PROM_USER")
-      password = sys.env("GRAFANA_CLOUD_API_TOKEN")
-    }
+		basic_auth {
+			username = sys.env("GRAFANA_CLOUD_PROM_USER")
+			password = sys.env("GRAFANA_CLOUD_API_TOKEN")
+		}
 
-    queue_config {
-      // Keep retrying through LTE drops instead of discarding samples.
-      min_backoff = "1s"
-      max_backoff = "1m"
-    }
-  }
+		queue_config {
+			// Keep retrying through LTE drops instead of discarding samples.
+			min_backoff = "1s"
+			max_backoff = "1m"
+		}
+	}
 
-  wal {
-    // Hold up to 8 h of unsent samples on disk; replay when the link comes back.
-    max_keepalive_time = "8h"
-  }
+	wal {
+		// Hold up to 8 h of unsent samples on disk; replay when the link comes back.
+		max_keepalive_time = "8h"
+	}
+}
+
+// ---------------------------------------------------------------------------
+// System logs (systemd-journald -> Grafana Cloud Loki)
+// ---------------------------------------------------------------------------
+loki.relabel "journal" {
+	forward_to = []
+
+	rule {
+		source_labels = ["__journal__systemd_unit"]
+		target_label  = "unit"
+	}
+
+	// Kernel (dmesg) entries have no _SYSTEMD_UNIT; tag them under unit="kernel".
+	rule {
+		source_labels = ["__journal__transport"]
+		regex         = "kernel"
+		target_label  = "unit"
+		replacement   = "kernel"
+	}
+
+	rule {
+		source_labels = ["__journal_priority_keyword"]
+		target_label  = "level"
+	}
+
+	// Allow-list: WARNING+ (0..4) for key OS/network services & kernel; INFO+ (0..6) for haavd.
+	rule {
+		source_labels = ["unit", "__journal_priority"]
+		regex         = "(kernel|ModemManager\\.service|tailscaled\\.service|alloy\\.service|haav-pi-health\\.service);[0-4]|haavd\\.service;([0-6]|)"
+		action        = "keep"
+	}
+}
+
+loki.source.journal "pi" {
+	max_age       = "12h"
+	relabel_rules = loki.relabel.journal.rules
+	forward_to    = [loki.write.grafana_cloud.receiver]
+
+	labels = {
+		job = "systemd-journal",
+	}
+}
+
+loki.write "grafana_cloud" {
+	external_labels = {
+		host = constants.hostname,
+	}
+
+	endpoint {
+		url = sys.env("GRAFANA_CLOUD_LOKI_URL")
+
+		basic_auth {
+			username = sys.env("GRAFANA_CLOUD_LOKI_USER")
+			password = sys.env("GRAFANA_CLOUD_API_TOKEN")
+		}
+
+		min_backoff_period = "1s"
+		max_backoff_period = "1m"
+		// Retry indefinitely through LTE drops (loki.write WAL requires --stability.level=experimental).
+		max_backoff_retries = 0
+	}
 }

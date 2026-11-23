@@ -33,6 +33,15 @@ if grep -q REPLACE_ME /etc/haav/grafana-cloud.env; then
   echo ">>> /etc/haav/grafana-cloud.env still has placeholder values." >&2
   exit 1
 fi
+for var in GRAFANA_CLOUD_PROM_URL GRAFANA_CLOUD_PROM_USER GRAFANA_CLOUD_LOKI_URL GRAFANA_CLOUD_LOKI_USER GRAFANA_CLOUD_API_TOKEN; do
+  if ! grep -Eq "^${var}=.+" /etc/haav/grafana-cloud.env; then
+    echo ">>> /etc/haav/grafana-cloud.env is missing ${var} (see deploy/grafana-cloud.env.example)." >&2
+    exit 1
+  fi
+done
+
+# Let Alloy read systemd-journald for Loki log shipping.
+usermod -aG systemd-journal alloy
 
 # Feed the credentials to the alloy service without touching the package's /etc/default/alloy.
 mkdir -p /etc/systemd/system/alloy.service.d

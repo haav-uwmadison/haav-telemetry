@@ -2,32 +2,34 @@
 
 Telemetry software for Haav's Raspberry Pi 4: reads boat sensors, logs locally, and pushes metrics over LTE to Grafana Cloud (with room for Pixhawk MAVLink later).
 
-**Status:** Step 2 (Pi health → Grafana Cloud via Alloy) is built and ready to test on a Pi. Sensor daemon (`haavd`), Loki logs, dashboards, and Pixhawk integration are planned below.
+**Status:** Step 2 (Pi health metrics + filtered system logs → Grafana Cloud via Alloy) is built and ready to test on a Pi. Sensor daemon (`haavd`), dashboards, and Pixhawk integration are planned below.
 
 ---
 
-## Quick start (Pi metrics → Grafana Cloud)
+## Quick start (Pi metrics & logs → Grafana Cloud)
 
 Proves the LTE → Grafana Cloud pipeline with zero sensors attached.
 
 ```sh
 git clone https://github.com/haav-uwmadison/haav-telemetry && cd haav-telemetry
 sudo ./deploy/install.sh                 # creates /etc/haav/grafana-cloud.env and exits
-sudo nano /etc/haav/grafana-cloud.env    # fill URL + user (Grafana Cloud → Prometheus → "Send metrics")
-                                         # and an access-policy token with metrics:write
+sudo nano /etc/haav/grafana-cloud.env    # fill Prometheus + Loki URLs/users from Grafana Cloud Details
+                                         # and an access-policy token with metrics:write + logs:write
 sudo ./deploy/install.sh                 # installs/updates Alloy + pi-health timer and starts both
 ```
 
 | File | Purpose |
 |---|---|
-| `deploy/alloy/config.alloy` | Built-in `unix` exporter allow-listed to ~60 series, scraped every 15 s, `remote_write` to Grafana Cloud with an 8 h disk WAL buffer |
+| `deploy/alloy/config.alloy` | Built-in `unix` exporter (~60 allow-listed series @ 15 s → Prometheus `remote_write` with 8 h WAL) + filtered `systemd-journald` → Loki |
 | `deploy/pi-health/pi-health.sh` + `deploy/systemd/haav-pi-health.*` | 15 s systemd timer writing `vcgencmd` under-voltage/throttle flags, ARM clock, and core voltage to `/var/lib/haav/textfile` |
-| `deploy/install.sh` | Idempotent installer: sets up Grafana's apt repo, Alloy, systemd drop-in (`/etc/systemd/system/alloy.service.d/haav.conf`), and `haav-pi-health.timer` |
+| `deploy/install.sh` | Idempotent installer: sets up Grafana's apt repo, Alloy (+ `systemd-journal` group), systemd drop-in (`/etc/systemd/system/alloy.service.d/haav.conf`), and `haav-pi-health.timer` |
 | `deploy/grafana-cloud.env.example` | Template copied to `/etc/haav/grafana-cloud.env` (`chmod 600`, gitignored) |
 
-**Metrics sent:** CPU (user/system/idle/iowait per core), load, memory, SD free space & read-only flag, network bytes (`eth0`, `wlan0`, `wwan0` = LTE burn rate, `usb0`, `tailscale0`), SoC temperature (`node_thermal_zone_temp` / `node_hwmon_temp_celsius`), boot time, and `haav_pi_*` firmware health. Every series carries `host=<hostname>` to separate the boat's Pi from a bench Pi or laptop.
+**Metrics sent:** CPU (user/system/idle/iowait per core), load, memory, SD free space & read-only flag, network bytes (`eth0`, `wlan0`, `wwan0` = LTE burn rate, `usb0`, `tailscale0`), SoC temperature (`node_thermal_zone_temp` / `node_hwmon_temp_celsius`), boot time, and `haav_pi_*` firmware health.
 
-**Verify:** open Alloy's UI at `http://<pi>:12345` (over Tailscale), query `node_thermal_zone_temp` in Grafana Cloud → Explore, then unplug the LTE antenna for 10 min and confirm the WAL backfills with no gap.
+**Logs sent:** `WARNING`+ from `kernel`, `ModemManager`, `tailscaled`, `alloy`, and `haav-pi-health` (plus `INFO`+ from `haavd` once built). All metrics and logs carry `host=<hostname>` to separate the boat's Pi from a bench Pi or laptop.
+
+**Verify:** open Alloy's UI at `http://<pi>:12345` (over Tailscale), query `node_thermal_zone_temp` (Prometheus) and `{job="systemd-journal"}` (Loki) in Grafana Cloud → Explore, then unplug the LTE antenna for 10 min and confirm metrics backfill with no gap.
 
 ---
 
@@ -83,16 +85,17 @@ flowchart LR
   S -- "later: MAVLink disarm/RTL" --> PX[Pixhawk]
   E & J --> A
   A -- "remote_write over LTE" --> GM[(Grafana Cloud<br/>Prometheus)]
-  A -- "logs (planned)" --> GL[(Grafana Cloud Loki)]
+  A -- "filtered logs" --> GL[(Grafana Cloud Loki)]
   GM & GL --> GD[Dashboards + Alerts]
   T -. "SSH" .- Pi
 ```
 
 ### Grafana Alloy (implemented)
 The only process talking to Grafana Cloud. Ships as an arm64 `.deb` systemd service (`deploy/alloy/config.alloy`):
-- Built-in `prometheus.exporter.unix` allow-listed to ~60 series + `/var/lib/haav/textfile` (`pi-health.sh` `vcgencmd` flags, catching 5 V rail under-voltage), scraped every 15 s.
-- `prometheus.remote_write` with 8 h disk WAL, retry backoff (1 s → 1 m), `external_labels = { host = constants.hostname }`, and credentials in `/etc/haav/grafana-cloud.env`.
-- **Planned:** scrape `haavd` (`:9101`, every 5 s) and forward `journald` warnings + `haavd` info via `loki.source.journal`.
+- **Metrics:** built-in `prometheus.exporter.unix` allow-listed to ~60 series + `/var/lib/haav/textfile` (`pi-health.sh` `vcgencmd` flags, catching 5 V rail under-voltage), scraped every 15 s → `prometheus.remote_write` with 8 h disk WAL and retry backoff (1 s → 1 m).
+- **Logs:** `loki.source.journal` filtered to `WARNING`+ from `kernel`, `ModemManager`, `tailscaled`, `alloy`, and `haav-pi-health` (plus `INFO`+ from `haavd`) → `loki.write` with indefinite retry backoff (1 s → 1 m).
+- Both pipelines tag `external_labels = { host = constants.hostname }` and read credentials from `/etc/haav/grafana-cloud.env`.
+- **Planned:** scrape `haavd` (`:9101`, every 5 s).
 
 ### `haavd` (planned)
 Single Python 3 `asyncio` daemon (`bleak`, `pyvesc`, `gpiod`, `prometheus_client`, `pyserial`, later `pymavlink`), supervised by systemd (`Restart=always`, `WatchdogSec=`) plus the Pi hardware watchdog:
